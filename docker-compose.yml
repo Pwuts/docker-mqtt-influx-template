@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # MQTT message broker
+  mosquitto:
+    build:
+      context: ./mosquitto
+    environment:
+      ADMIN_USERNAME: ${MQTT_ADMIN_USERNAME:-hoco}
+      ADMIN_PASSWORD: ${MQTT_ADMIN_PASSWORD:-verysecret}
+      TELEGRAF_PASSWORD: ${TELEGRAF_MQTT_PASSWORD:-verysecret}
+    volumes:
+      - mosquitto_data:/mosquitto/data/:cached
+      # - ./data/mosquitto/:/mosquitto/data/
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./mosquitto/dynsec_default.json:/config/dynsec_default.json:ro
+      - ./mosquitto/mosquitto-entrypoint.sh:/mosquitto-entrypoint.sh:ro
+    ports:
+      - 18883:1883 # MQTT
+      - 9001:9001 # WebSocket
+    restart: unless-stopped
+
+  # Admin UI for Mosquitto
+  mosquitto_admin:
+    image: cedalo/management-center:2
+    environment:
+      # credentials for logging in to the admin UI
+      CEDALO_MC_USERNAME: ${ADMIN_USERNAME:-hoco}
+      CEDALO_MC_PASSWORD: ${ADMIN_PASSWORD:-verysecret}
+      CEDALO_MC_BROKER_ID: mosquitto
+      CEDALO_MC_BROKER_URL: mqtt://mosquitto:1883
+      CEDALO_MC_BROKER_NAME: Mosquitto
+      # credentials for connecting with mosquitto
+      CEDALO_MC_BROKER_USERNAME: ${MQTT_ADMIN_USERNAME:-hoco}
+      CEDALO_MC_BROKER_PASSWORD: ${MQTT_ADMIN_PASSWORD:-verysecret}
+    ports:
+      - 8088:8088 # HTTP - admin UI
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+
+  # Time-series database
+  influxdb:
+    image: influxdb:latest
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_DEFAULT_ORG:-ETV}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_DEFAULT_BUCKET:-default}
+      DOCKER_INFLUXDB_INIT_USERNAME: ${ADMIN_USERNAME:-hoco}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${ADMIN_PASSWORD:-verysecret}
+      TELEGRAF_TOKEN: ${TELEGRAF_INFLUXDB_TOKEN:-verysecret}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2/:cached
+      # - ./data/influxdb/:/var/lib/influxdb2/
+      - ./influxdb/auth-setup.sh:/docker-entrypoint-initdb.d/auth-setup.sh
+    ports:
+      - 8086:8086 # HTTP - UI/API
+    restart: unless-stopped
+
+  # Telegraf can forward messages from MQTT to InfluxDB
+  # depending on its configuration in telegraf.conf
+  telegraf:
+    image: telegraf:latest
+    environment:
+      MQTT_PASSWORD: ${TELEGRAF_MQTT_PASSWORD:-verysecret}
+      INFLUXDB_TOKEN: ${TELEGRAF_INFLUXDB_TOKEN:-verysecret}
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    depends_on:
+      - mosquitto
+      - influxdb
+    restart: unless-stopped
+
+volumes:
+  mosquitto_data:
+  influxdb_data:
